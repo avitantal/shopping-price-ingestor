@@ -1,8 +1,9 @@
-import ftplib
 import gzip
 import html as html_mod
 import io
+import json
 import re
+import subprocess
 from typing import Optional
 
 import requests
@@ -10,8 +11,6 @@ import requests
 from chains import CHAINS, FTP_HOST
 
 HEADERS = {"User-Agent": "ShoppingListApp/1.0 (avitantal@gmail.com)"}
-
-FTP_TIMEOUT = 90   # seconds — FTP server can be slow to respond
 
 
 def _list_shufersal_files() -> list[dict]:
@@ -43,9 +42,8 @@ def _list_carrefour_files() -> list[dict]:
     files_m = re.search(r"const files\s*=\s*(\[.*?\]);", r.text, re.DOTALL)
     if not path_m or not files_m:
         return []
-    import json as _json
     path = path_m.group(1)
-    files = _json.loads(files_m.group(1))
+    files = json.loads(files_m.group(1))
     return [
         {
             "fname": f["name"],
@@ -56,37 +54,33 @@ def _list_carrefour_files() -> list[dict]:
     ]
 
 
-def _ftp_connect(ftp_user: str) -> ftplib.FTP:
-    """Open an active-mode FTP connection (PASV blocked on this server)."""
-    ftp = ftplib.FTP(timeout=FTP_TIMEOUT)
-    ftp.connect(FTP_HOST, 21, timeout=FTP_TIMEOUT)
-    ftp.sendcmd(f"USER {ftp_user}")
-    ftp.sendcmd("PASS ")
-    ftp.set_pasv(False)
-    return ftp
+def _curl_ftp(url: str, extra_args: list[str] | None = None) -> bytes:
+    """Run curl for FTP — handles PASV/PORT negotiation better than ftplib."""
+    cmd = [
+        "curl", "-s", "--ftp-pasv", "--retry", "2",
+        "--connect-timeout", "30", "--max-time", "120",
+        "-A", "ShoppingListApp/1.0 (avitantal@gmail.com)",
+    ] + (extra_args or []) + [url]
+    result = subprocess.run(cmd, capture_output=True, timeout=150)
+    if result.returncode != 0:
+        raise RuntimeError(f"curl FTP failed (rc={result.returncode}): {result.stderr.decode()[:300]}")
+    return result.stdout
 
 
 def _list_ftp_files(ftp_user: str) -> list[str]:
-    ftp = _ftp_connect(ftp_user)
-    try:
-        files = ftp.nlst()
-    finally:
-        ftp.quit()
+    url = f"ftp://{ftp_user}:@{FTP_HOST}/"
+    raw = _curl_ftp(url, ["--list-only"])
+    lines = raw.decode("utf-8", errors="replace").splitlines()
     return sorted(
-        [f for f in files if "PriceFull" in f and f.endswith(".gz")],
+        [ln.strip() for ln in lines if "PriceFull" in ln and ln.strip().endswith(".gz")],
         reverse=True,
     )
 
 
 def _download_ftp(ftp_user: str, filename: str) -> bytes:
-    buf = io.BytesIO()
-    ftp = _ftp_connect(ftp_user)
-    try:
-        ftp.retrbinary(f"RETR {filename}", buf.write)
-    finally:
-        ftp.quit()
-    buf.seek(0)
-    with gzip.open(buf) as f:
+    url = f"ftp://{ftp_user}:@{FTP_HOST}/{filename}"
+    gz_data = _curl_ftp(url)
+    with gzip.open(io.BytesIO(gz_data)) as f:
         return f.read()
 
 
@@ -115,7 +109,7 @@ def get_latest_pricefull(chain_code: str) -> Optional[tuple[str, bytes]]:
         f = files[0]
         return f["fname"], _download_web(f["url"])
 
-    # ftp
+    # ftp — via curl (handles PASV negotiation better than ftplib)
     ftp_files = _list_ftp_files(cfg["ftp_user"])
     if not ftp_files:
         return None
