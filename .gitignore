@@ -1,11 +1,5 @@
 __pycache__/
 *.pyc
-*.pyo
 .env
-.env.*
-downloads/
-*.xml
-*.gz
-*.zip
-.pytest_cache/
-.coverage
+.venv/
+venv/
