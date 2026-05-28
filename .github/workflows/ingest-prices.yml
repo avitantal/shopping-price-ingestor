@@ -1,0 +1,58 @@
+name: Ingest Retail Prices
+
+on:
+  schedule:
+    # 05:00 UTC (08:00 IL) and 16:00 UTC (19:00 IL) — after daily PriceFull publish
+    - cron: "0 5,16 * * *"
+  workflow_dispatch:
+    inputs:
+      chains:
+        description: "Space-separated chain codes (blank = all)"
+        required: false
+        default: ""
+
+jobs:
+  ingest:
+    name: Ingest ${{ matrix.chain }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        chain:
+          - shufersal
+          - mega
+          - rami_levy
+          - victory
+          - osher_ad
+          - hazi_hinam
+          - yohananof
+
+    steps:
+      - name: Skip if not in manual filter
+        if: >
+          github.event_name == 'workflow_dispatch' &&
+          github.event.inputs.chains != '' &&
+          !contains(github.event.inputs.chains, matrix.chain)
+        run: |
+          echo "Chain ${{ matrix.chain }} not in filter — skipping"
+          exit 0
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run ingestion
+        env:
+          INGEST_URL: ${{ secrets.INGEST_URL }}
+          INGEST_KEY: ${{ secrets.INGEST_KEY }}
+          FTP_PASSWORD: ${{ secrets.FTP_PASSWORD }}
+        run: python run.py ${{ matrix.chain }}
