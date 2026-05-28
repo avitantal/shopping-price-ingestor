@@ -31,10 +31,47 @@ def _list_shufersal_files() -> list[dict]:
     return results
 
 
+def _list_carrefour_files() -> list[dict]:
+    """Scrape Carrefour portal: extract const files JSON and path from page."""
+    r = requests.get(
+        "https://prices.carrefour.co.il/",
+        headers=HEADERS,
+        timeout=30,
+    )
+    r.raise_for_status()
+    path_m = re.search(r"const path\s*=\s*'(\d+)'", r.text)
+    files_m = re.search(r"const files\s*=\s*(\[.*?\]);", r.text, re.DOTALL)
+    if not path_m or not files_m:
+        return []
+    import json as _json
+    path = path_m.group(1)
+    files = _json.loads(files_m.group(1))
+    return [
+        {
+            "fname": f["name"],
+            "url": f"https://prices.carrefour.co.il/{path}/{f['name']}",
+        }
+        for f in files
+        if "PriceFull" in f.get("name", "")
+    ]
+
+
+def _ftp_connect(ftp_user: str) -> ftplib.FTP:
+    """Open an active-mode FTP connection (PASV blocked on this server)."""
+    ftp = ftplib.FTP(timeout=FTP_TIMEOUT)
+    ftp.connect(FTP_HOST, 21, timeout=FTP_TIMEOUT)
+    ftp.sendcmd(f"USER {ftp_user}")
+    ftp.sendcmd("PASS ")
+    ftp.set_pasv(False)
+    return ftp
+
+
 def _list_ftp_files(ftp_user: str) -> list[str]:
-    with ftplib.FTP(FTP_HOST, timeout=FTP_TIMEOUT) as ftp:
-        ftp.login(user=ftp_user, passwd="")
+    ftp = _ftp_connect(ftp_user)
+    try:
         files = ftp.nlst()
+    finally:
+        ftp.quit()
     return sorted(
         [f for f in files if "PriceFull" in f and f.endswith(".gz")],
         reverse=True,
@@ -43,9 +80,11 @@ def _list_ftp_files(ftp_user: str) -> list[str]:
 
 def _download_ftp(ftp_user: str, filename: str) -> bytes:
     buf = io.BytesIO()
-    with ftplib.FTP(FTP_HOST, timeout=FTP_TIMEOUT) as ftp:
-        ftp.login(user=ftp_user, passwd="")
+    ftp = _ftp_connect(ftp_user)
+    try:
         ftp.retrbinary(f"RETR {filename}", buf.write)
+    finally:
+        ftp.quit()
     buf.seek(0)
     with gzip.open(buf) as f:
         return f.read()
@@ -64,6 +103,12 @@ def get_latest_pricefull(chain_code: str) -> Optional[tuple[str, bytes]]:
 
     if cfg["access"] == "web":
         files = _list_shufersal_files()
+    elif cfg["access"] == "carrefour":
+        files = _list_carrefour_files()
+    else:
+        files = None
+
+    if files is not None:
         if not files:
             return None
         files.sort(key=lambda x: x["fname"], reverse=True)
@@ -71,7 +116,7 @@ def get_latest_pricefull(chain_code: str) -> Optional[tuple[str, bytes]]:
         return f["fname"], _download_web(f["url"])
 
     # ftp
-    files = _list_ftp_files(cfg["ftp_user"])
-    if not files:
+    ftp_files = _list_ftp_files(cfg["ftp_user"])
+    if not ftp_files:
         return None
-    return files[0], _download_ftp(cfg["ftp_user"], files[0])
+    return ftp_files[0], _download_ftp(cfg["ftp_user"], ftp_files[0])

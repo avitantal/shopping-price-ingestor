@@ -8,10 +8,10 @@ CHAINS = {
         "web_url": "https://prices.shufersal.co.il",
     },
     "mega": {
-        "display_name": "מגה",
-        "chain_id": "7290055700014",
-        "access": "ftp",
-        "ftp_user": "Mega",
+        "display_name": "מגה/קרפור",
+        "chain_id": "7290055700007",
+        "access": "carrefour",
+        "web_url": "https://prices.carrefour.co.il",
     },
     "rami_levy": {
         "display_name": "רמי לוי",
