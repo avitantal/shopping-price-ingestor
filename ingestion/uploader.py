@@ -3,7 +3,7 @@ import sys
 
 import requests
 
-BATCH_SIZE = 5_000
+BATCH_SIZE = 500
 
 
 def compute_sha256(data: bytes) -> str:
